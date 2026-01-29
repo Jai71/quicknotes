@@ -2,6 +2,28 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { z } from "zod";
+
+const NoteSchema = z.object({
+  title: z
+    .string()
+    .trim()
+    .max(80, "Title must be 80 characters or less"),
+  content: z
+    .string()
+    .trim()
+    .min(1, "Content cannot be empty")
+    .max(5000, "Content must be 5000 characters or less"),
+});
+
+function validateNoteOrAlert(title: string, content: string) {
+  const parsed = NoteSchema.safeParse({ title, content });
+  if (!parsed.success) {
+    alert(parsed.error.issues[0]?.message ?? "Invalid input");
+    return null;
+  }
+  return parsed.data; // { title: trimmedTitle, content: trimmedContent }
+}
 
 type Note = {
   id: string;
@@ -14,7 +36,7 @@ export default function Home() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [title, setTitle] = useState("");
@@ -41,7 +63,15 @@ export default function Home() {
       .select("id,title,content,created_at")
       .order("created_at", { ascending: false });
 
-    if (!error && data) setNotes(data as Note[]);
+    if (!error && data) {
+      const nextNotes = data as Note[];
+      setNotes(nextNotes);
+      if (editingId && !nextNotes.some((n) => n.id === editingId)) {
+        setEditingId(null);
+        setTitle("");
+        setContent("");
+      }
+    }
     setLoading(false);
   }
 
@@ -85,10 +115,16 @@ export default function Home() {
       return;
     }
 
+    const clean = validateNoteOrAlert(title, content);
+    if (!clean) {
+      setLoading(false);
+      return;
+    }
+
     const { error } = await supabase.from("notes").insert({
       user_id: user.id,
-      title,
-      content,
+      title: clean.title,
+      content: clean.content,
     });
 
     setLoading(false);
@@ -106,6 +142,33 @@ export default function Home() {
     setLoading(false);
     if (error) alert(error.message);
     else await loadNotes();
+  }
+
+  async function updateNote() {
+    if (!editingId) return;
+
+    const clean = validateNoteOrAlert(title, content);
+    if (!clean) return;
+
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from("notes")
+        .update({ title: clean.title, content: clean.content })
+        .eq("id", editingId);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      setEditingId(null);
+      setTitle("");
+      setContent("");
+      await loadNotes();
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -155,7 +218,12 @@ export default function Home() {
         </section>
       ) : (
         <section className="mt-6 p-4 border rounded-lg">
-          <h2 className="font-medium">New note</h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="font-medium">{editingId ? "Edit note" : "New note"}</h2>
+            {editingId ? (
+              <span className="text-xs text-gray-500">Editing mode</span>
+            ) : null}
+          </div>
           <div className="mt-3 grid gap-2">
             <input
               className="border rounded-md p-2"
@@ -170,9 +238,26 @@ export default function Home() {
               onChange={(e) => setContent(e.target.value)}
             />
             <div className="flex gap-2 items-center">
-              <button className="px-3 py-2 rounded-md border" onClick={addNote} disabled={loading}>
-                Add note
+              <button
+                className="px-3 py-2 rounded-md border"
+                onClick={editingId ? updateNote : addNote}
+                disabled={loading}
+              >
+                {editingId ? "Save changes" : "Add note"}
               </button>
+              {editingId ? (
+                <button
+                  className="px-3 py-2 rounded-md border"
+                  onClick={() => {
+                    setEditingId(null);
+                    setTitle("");
+                    setContent("");
+                  }}
+                  disabled={loading}
+                >
+                  Cancel
+                </button>
+              ) : null}
               {loading ? <span className="text-sm text-gray-500">Working…</span> : null}
             </div>
           </div>
@@ -198,13 +283,28 @@ export default function Home() {
                     {new Date(n.created_at).toLocaleString()}
                   </p>
                 </div>
-                <button
-                  className="px-3 py-2 rounded-md border"
-                  onClick={() => deleteNote(n.id)}
-                  disabled={loading}
-                >
-                  Delete
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    className="px-3 py-2 rounded-md border"
+                    onClick={() => {
+                      setEditingId(n.id);
+                      setTitle(n.title ?? "");
+                      setContent(n.content ?? "");
+                      // Scroll the form into view for convenience
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                    disabled={loading}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="px-3 py-2 rounded-md border"
+                    onClick={() => deleteNote(n.id)}
+                    disabled={loading}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             </div>
           ))}
