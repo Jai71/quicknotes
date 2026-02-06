@@ -1,5 +1,5 @@
 "use client";
-
+import { logError } from "@/lib/supabase/log";
 import { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { z } from "zod";
@@ -63,7 +63,13 @@ export default function Home() {
       .select("id,title,content,created_at")
       .order("created_at", { ascending: false });
 
-    if (!error && data) {
+      if (error) {
+        logError("supabase.loadNotes", error);
+        setLoading(false);
+        return;
+      }
+
+    if (data) {
       const nextNotes = data as Note[];
       setNotes(nextNotes);
       if (editingId && !nextNotes.some((n) => n.id === editingId)) {
@@ -90,19 +96,38 @@ export default function Home() {
     setLoading(true);
     const { error } = await supabase.auth.signUp({ email, password });
     setLoading(false);
-    if (error) alert(error.message);
-    else alert("Signed up! If email confirmation is on, check your inbox.");
+    if (error) {
+      logError("auth.signUp", error, { email });
+      alert(error.message);
+      return;
+    }
+    
+    // Email confirmation is OFF in your Supabase settings, so they can sign in right away.
+    alert("Signed up! You can sign in now.");
   }
 
   async function signIn() {
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
-    if (error) alert(error.message);
+    if (error) {
+        logError("auth.signIn", error, { email });
+        alert(error.message);
+        return;
+    }
+
+    // Session + notes are refreshed via onAuthStateChange
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    setLoading(true);
+    const { error } = await supabase.auth.signOut();
+    setLoading(false);
+    if (error) {
+       logError("auth.signOut", error, { userEmail });
+       alert(error.message);
+       return;
+     }
   }
 
   async function addNote() {
@@ -128,7 +153,10 @@ export default function Home() {
     });
 
     setLoading(false);
-    if (error) alert(error.message);
+    if (error) {
+      logError("supabase.addNote", error);
+      alert(error.message);
+    }
     else {
       setTitle("");
       setContent("");
@@ -140,7 +168,10 @@ export default function Home() {
     setLoading(true);
     const { error } = await supabase.from("notes").delete().eq("id", id);
     setLoading(false);
-    if (error) alert(error.message);
+    if (error) {
+      logError("supabase.deleteNote", error, { id });
+      alert(error.message);
+    }
     else await loadNotes();
   }
 
@@ -157,10 +188,11 @@ export default function Home() {
         .update({ title: clean.title, content: clean.content })
         .eq("id", editingId);
 
-      if (error) {
-        alert(error.message);
-        return;
-      }
+        if (error) {
+          logError("supabase.updateNote", error, { editingId });
+          alert(error.message);
+          return;
+        }
 
       setEditingId(null);
       setTitle("");
